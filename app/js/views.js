@@ -1,177 +1,203 @@
-// views.js — renders the checklist, the detail pane, the roadmap page and the
-// missables page. All text comes from data/trophies.json; this file only lays
-// it out. Visuals are CSS only — no images, no game artwork.
+/* Leonida Trophy Guide — views.js
+   Rendering only: turns trophy data + progress state into HTML strings.
+   Every dynamic string passes through esc() before it reaches the page. */
+(function () {
+  "use strict";
 
-import { isMasked } from "./filters.js";
-import { ROADMAP } from "./roadmap.js";
+  function esc(value) {
+    return String(value == null ? "" : value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;");
+  }
 
-const esc = (s) =>
-  String(s ?? "").replace(/[&<>"']/g, (c) => ({
-    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
-  }[c]));
+  function gradeLabel(grade) {
+    return grade.charAt(0).toUpperCase() + grade.slice(1);
+  }
 
-const KIND_LABEL = {
-  story: "Story",
-  activity: "Activity",
-  collectible: "Collectible",
-  completion: "Completion",
-  misc: "Miscellaneous",
-};
+  function kindLabel(kind) {
+    var labels = {
+      story: "Story",
+      missable: "Missable",
+      collectibles: "Collectibles",
+      activities: "Activities",
+      completion: "Completion",
+      other: "Other",
+      online: "Online"
+    };
+    return labels[kind] || kind;
+  }
 
-function tagsFor(t, earned) {
-  const tags = [`<span class="tag">${esc(KIND_LABEL[t.kind] || t.kind)}</span>`];
-  if (t.missable) tags.push(`<span class="tag tag-missable">Missable</span>`);
-  if (t.unconfirmed) tags.push(`<span class="tag tag-unconfirmed">Trigger unconfirmed</span>`);
-  if (t.hidden) tags.push(`<span class="tag">Hidden on PSN</span>`);
-  if (earned) tags.push(`<span class="tag tag-earned">Earned</span>`);
-  return tags.join("");
-}
+  function badges(trophy, earned) {
+    var out = "";
+    out += '<span class="badge grade-' + esc(trophy.grade) + '">' + esc(gradeLabel(trophy.grade)) + "</span>";
+    out += '<span class="badge">' + esc(kindLabel(trophy.kind)) + "</span>";
+    if (trophy.missable) out += '<span class="badge alert">Possibly missable</span>';
+    if (trophy.unconfirmed) out += '<span class="badge warn">Unconfirmed</span>';
+    if (trophy.hidden && !earned) out += '<span class="badge">Hidden</span>';
+    if (earned) out += '<span class="badge done">Earned</span>';
+    return out;
+  }
 
-export function renderList(listEl, trophies, ctx) {
-  listEl.innerHTML = trophies
-    .map((t) => {
-      const earned = ctx.isEarned(t.id);
-      const masked = isMasked(t, { hideSpoilers: ctx.hideSpoilers, isEarned: ctx.isEarned });
-      const name = masked ? "Hidden story trophy" : t.name;
-      const desc = masked ? "Masked by your spoiler setting — earn it to reveal." : t.description;
-      return `
-      <li>
-        <div class="trophy-row ${earned ? "is-earned" : ""} ${ctx.selectedId === t.id ? "is-selected" : ""}"
-             data-select="${t.id}" role="button" tabindex="0" aria-label="${esc(name)}">
-          <input type="checkbox" class="trophy-check" data-toggle="${t.id}"
-                 ${earned ? "checked" : ""} aria-label="Mark ${esc(name)} as earned">
-          <span class="grade-chip grade-${esc(t.grade)}">${esc(t.grade)}</span>
-          <span class="trophy-main">
-            <span class="trophy-name ${masked ? "masked" : ""}">${esc(name)}</span>
-            <span class="trophy-desc ${masked ? "masked" : ""}">${esc(desc)}</span>
-            <span class="trophy-tags">${tagsFor(t, earned)}</span>
-          </span>
-        </div>
-      </li>`;
-    })
-    .join("");
+  function formatTarget(trophy) {
+    if (trophy.target == null) return esc(trophy.targetLabel || "");
+    return esc(trophy.target.toLocaleString("en-US")) + " — " + esc(trophy.targetLabel || "");
+  }
 
-  listEl.querySelectorAll("[data-toggle]").forEach((box) => {
-    box.addEventListener("click", (ev) => ev.stopPropagation());
-    box.addEventListener("change", () => ctx.onToggle(Number(box.dataset.toggle), box.checked));
-  });
-  listEl.querySelectorAll("[data-select]").forEach((row) => {
-    row.addEventListener("click", () => ctx.onSelect(Number(row.dataset.select)));
-    row.addEventListener("keydown", (ev) => {
-      if (ev.key === "Enter" || ev.key === " ") {
-        ev.preventDefault();
-        ctx.onSelect(Number(row.dataset.select));
-      }
+  /* ---------- checklist cards ---------- */
+
+  function trophyCard(trophy, opts) {
+    var earned = opts.isEarned(trophy.id);
+    var name = trophy._masked ? "Hidden trophy" : trophy.name;
+    var desc = trophy._masked
+      ? "This trophy is hidden until you earn it."
+      : trophy.description;
+    var classes = "trophy-card grade-" + trophy.grade +
+      (earned ? " is-earned" : "") +
+      (opts.selectedId === trophy.id ? " is-selected" : "");
+    return (
+      '<button type="button" class="' + classes + '" data-trophy-id="' + trophy.id + '">' +
+        '<span class="card-main">' +
+          '<span class="card-top"><span class="card-name">' + esc(name) + "</span></span>" +
+          '<span class="card-desc">' + esc(desc) + "</span>" +
+          '<span class="card-badges">' + badges(trophy, earned) + "</span>" +
+        "</span>" +
+        '<span class="card-check" aria-hidden="true">✓</span>' +
+      "</button>"
+    );
+  }
+
+  function trophyList(trophies, opts) {
+    if (trophies.length === 0) {
+      return '<div class="empty-state"><strong>Nothing matches.</strong><br>' +
+        "No trophies fit the current search and filters. " +
+        (opts.kind === "online"
+          ? "That is expected for the Online filter: no trophy in this list requires online play."
+          : "Try widening the filters.") +
+        "</div>";
+    }
+    return trophies.map(function (t) { return trophyCard(t, opts); }).join("");
+  }
+
+  /* ---------- detail pane ---------- */
+
+  function detail(trophy, opts) {
+    if (!trophy) {
+      return '<p class="detail-empty">Select a trophy to see its guide, target and warnings.</p>';
+    }
+    var earned = opts.isEarned(trophy.id);
+    var masked = !earned && (trophy.hidden || (opts.hideSpoilers && trophy.kind === "story"));
+    var name = masked ? "Hidden trophy" : trophy.name;
+    var desc = masked ? "This trophy is hidden until you earn it." : trophy.description;
+    var out = "";
+    out += "<h2>" + esc(name) + "</h2>";
+    out += '<p class="official-desc">“' + esc(desc) + '”</p>';
+    out += '<div class="card-badges">' + badges(trophy, earned) + "</div>";
+
+    if (trophy.unconfirmed) {
+      out += '<div class="callout warn"><strong>Unconfirmed trigger.</strong> ' +
+        "No tracker has verified how this trophy is earned yet. The note below is honest about what is known — and what is not.</div>";
+    }
+    if (trophy.missable) {
+      out += '<div class="callout alert"><strong>Possibly missable.</strong> ' +
+        "One part of this trophy is tied to a one-time story moment and there is no mission replay or New Game Plus. Read the guide before you play past Chapter 1.</div>";
+    }
+
+    out += "<h3>Guide</h3><p>" + esc(trophy.guide) + "</p>";
+
+    if (trophy.targetLabel || trophy.target != null) {
+      out += "<h3>Target</h3><p>" + formatTarget(trophy) + "</p>";
+    }
+
+    if (typeof trophy.target === "number" && trophy.target > 1) {
+      var count = opts.getCount(trophy.id);
+      out += "<h3>Your counter</h3>" +
+        '<div class="counter-row">' +
+          '<button type="button" class="counter-btn" data-counter="-1" aria-label="Decrease counter">−</button>' +
+          '<span class="count">' + count.toLocaleString("en-US") + " / " + trophy.target.toLocaleString("en-US") + "</span>" +
+          '<button type="button" class="counter-btn" data-counter="1" aria-label="Increase counter">+</button>' +
+        "</div>" +
+        '<p class="fineprint">A personal tally for your own tracking — it does not read your PSN data.</p>';
+    }
+
+    out += "<h3>Rarity</h3><p>" + esc(trophy.rarity) + "</p>";
+    out += "<h3>Sources</h3>" +
+      '<p class="fineprint">Trophy listed by Exophase, PSNProfiles and PowerPyx.' +
+      (trophy.unconfirmed ? " All three list it without a confirmed method at launch." : "") +
+      "</p>";
+
+    out += '<button type="button" class="earn-btn' + (earned ? " is-earned" : "") + '" data-toggle-earned="' + trophy.id + '">' +
+      (earned ? "Earned — tap to undo" : "Mark as earned") + "</button>";
+    return out;
+  }
+
+  /* ---------- roadmap ---------- */
+
+  function roadmap(data, opts) {
+    var meta = window.LTGRoadmap.meta;
+    var out = "";
+    out += '<div class="page-intro"><h2>Platinum Roadmap</h2>' +
+      "<p>One playthrough, three steps. The platinum (Vice Got a Price!) unlocks automatically when the other 54 trophies are earned, so this route is simply the order that wastes the least effort: story first, strands and feats second, the counted 100% sweep last.</p>" +
+      '<div class="stat-row">' +
+        '<span class="stat-chip">Difficulty <strong>' + esc(meta.difficulty) + "</strong></span>" +
+        '<span class="stat-chip">Time <strong>' + esc(meta.hours) + "</strong></span>" +
+        '<span class="stat-chip">Playthroughs <strong>' + esc(meta.playthroughs) + "</strong></span>" +
+        '<span class="stat-chip">Online <strong>not required</strong></span>' +
+      "</div></div>";
+
+    window.LTGRoadmap.steps.forEach(function (step) {
+      var progress = window.LTGRoadmap.stepProgress(step, opts.isEarned);
+      var byId = {};
+      data.trophies.forEach(function (t) { byId[t.id] = t; });
+      out += '<article class="step-card"><h3>' + esc(step.title) + "</h3>" +
+        '<div class="step-meta">' + esc(step.hours) + " · " + progress.done + " / " + progress.total + " trophies</div>" +
+        "<p>" + esc(step.blurb) + "</p>" +
+        '<div class="progress-track"><div class="progress-fill" style="width:' + progress.pct + '%"></div></div>' +
+        '<div class="step-trophies">' +
+          step.trophyIds.map(function (id) {
+            var t = byId[id];
+            var label = t ? t.name : ("Trophy " + id);
+            return '<span class="step-trophy' + (opts.isEarned(id) ? " done" : "") + '">' + esc(label) + "</span>";
+          }).join("") +
+        "</div></article>";
     });
-  });
-}
 
-export function renderDetail(pane, trophy, ctx) {
-  if (!trophy) {
-    pane.innerHTML = `<p class="detail-hint">Pick a trophy from the list to see its guide, target, missable warnings and sources.</p>`;
-    return;
+    out += '<div class="page-intro"><h2>Before you start</h2><ul class="note-list">' +
+      window.LTGRoadmap.warnings.map(function (w) { return "<li>" + esc(w) + "</li>"; }).join("") +
+      "</ul></div>";
+    return out;
   }
-  const t = trophy;
-  const earned = ctx.isEarned(t.id);
-  const masked = isMasked(t, { hideSpoilers: ctx.hideSpoilers, isEarned: ctx.isEarned });
-  const name = masked ? "Hidden story trophy" : t.name;
-  const desc = masked ? "This story trophy is masked by your spoiler setting until you earn it." : t.description;
-  const guide = masked
-    ? "The guide for this trophy is hidden too — it would give away story beats. Mark the trophy earned (or turn the spoiler setting off in the footer) to read it."
-    : t.guide;
 
-  const meta = [];
-  if (t.target) meta.push(`<div><b>PSN target</b>${esc(t.target)}</div>`);
-  meta.push(`<div><b>Grade / kind</b>${esc(t.grade)} · ${esc(KIND_LABEL[t.kind] || t.kind)}</div>`);
-  if (t.missable) {
-    meta.push(`<div class="warn-box"><b>Missable warning</b>This trophy can be missed. Read the guide before playing past the point it describes.</div>`);
+  /* ---------- missables ---------- */
+
+  function missables(data, opts) {
+    var risky = data.trophies.filter(function (t) { return t.missable; });
+    var out = "";
+    out += '<div class="page-intro"><h2>Missables &amp; one-time moments</h2>' +
+      "<p>Good news first: this is a gentle list. No trophy requires online play, the story trophies cannot be locked out, and almost everything else can be cleaned up in free roam after the credits. There is exactly one trophy the community flags as possibly missable — treat it with respect, because the game offers no mission replay and no New Game Plus.</p></div>";
+
+    risky.forEach(function (t) {
+      var earned = opts.isEarned(t.id);
+      out += '<article class="step-card"><h3>' + esc(t.name) + "</h3>" +
+        '<div class="step-meta">' + esc(gradeLabel(t.grade)) + " · " + esc(t.targetLabel || "") + (earned ? " · Earned" : "") + "</div>" +
+        "<p>" + esc(t.guide) + "</p></article>";
+    });
+
+    out += '<div class="page-intro"><h2>The structural gotchas</h2><ul class="note-list">' +
+      window.LTGRoadmap.warnings.map(function (w) { return "<li>" + esc(w) + "</li>"; }).join("") +
+      "</ul>" +
+      "<p>The practical upshot: do the Chapter 1 balcony meditation when it appears, keep cheats on a separate save, and everything else can wait until you feel like it.</p></div>";
+    return out;
   }
-  if (t.unconfirmed) {
-    meta.push(`<div class="note-box"><b>Trigger unconfirmed</b>No launch guide has confirmed this trophy's exact trigger yet, so the guide says what is known and does not invent steps.</div>`);
-  }
-  meta.push(`<div><b>Rarity</b>${esc(ctx.rarityNote)}</div>`);
 
-  const sources = (t.sources || [])
-    .map((s) => `<li><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.name)}</a></li>`)
-    .join("");
-
-  pane.innerHTML = `
-    <span class="grade-chip grade-${esc(t.grade)}">${esc(t.grade)}</span>
-    <h2 class="${masked ? "masked" : ""}">${esc(name)}</h2>
-    <p class="detail-desc ${masked ? "masked" : ""}">${esc(desc)}</p>
-    <p class="detail-guide">${esc(guide)}</p>
-    <div class="detail-meta">${meta.join("")}</div>
-    ${sources ? `<h3>Sources</h3><ul class="detail-sources">${sources}</ul>` : ""}
-    <button type="button" class="detail-toggle" data-detail-toggle="${t.id}" aria-pressed="${earned}">
-      ${earned ? "Earned — tap to undo" : "Mark as earned"}
-    </button>`;
-
-  pane.querySelector("[data-detail-toggle]").addEventListener("click", () => {
-    ctx.onToggle(t.id, !earned);
-  });
-}
-
-export function renderRoadmap(section, trophies, ctx) {
-  const stepCards = ROADMAP.steps
-    .map((step) => {
-      const inStep = trophies.filter((t) => step.kinds.includes(t.kind));
-      const done = inStep.filter((t) => ctx.isEarned(t.id)).length;
-      const pct = inStep.length ? Math.round((done / inStep.length) * 100) : 0;
-      return `
-      <article class="step-card">
-        <h3>${esc(step.title)}</h3>
-        <p>${esc(step.body)}</p>
-        <div class="step-progress">
-          <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
-          <output>${done} / ${inStep.length} trophies</output>
-        </div>
-      </article>`;
-    })
-    .join("");
-
-  section.innerHTML = `
-    <div class="page-head">
-      <h2>Platinum roadmap</h2>
-      <p>${esc(ROADMAP.summary)}</p>
-    </div>
-    <div class="stat-cards">
-      <div class="stat-card"><b>${esc(ROADMAP.difficulty)}</b><span>difficulty (PowerPyx)</span></div>
-      <div class="stat-card"><b>${esc(ROADMAP.hours)}</b><span>estimated time to platinum</span></div>
-      <div class="stat-card"><b>1</b><span>possibly missable trophy</span></div>
-      <div class="stat-card"><b>0</b><span>online trophies</span></div>
-    </div>
-    ${stepCards}`;
-}
-
-export function renderMissables(section, trophies, ctx) {
-  const missables = trophies.filter((t) => t.missable);
-  const cards = missables
-    .map((t) => {
-      const earned = ctx.isEarned(t.id);
-      return `
-      <article class="alert-card">
-        <h3>${esc(t.name)} <span class="grade-chip grade-${esc(t.grade)}">${esc(t.grade)}</span></h3>
-        <p><i>${esc(t.description)}</i>${t.target ? ` · Target: ${esc(t.target)}` : ""}</p>
-        <p>${esc(t.guide)}</p>
-        <p>${earned ? "You have marked this one earned — nothing left to worry about." : "Not yet marked earned. Do not play past the moment the guide describes without doing it."}</p>
-      </article>`;
-    })
-    .join("");
-
-  section.innerHTML = `
-    <div class="page-head">
-      <h2>Missables</h2>
-      <p>Launch guides agree the list is almost entirely missable-free — with one exception worth planning around. The facts that shape your run:</p>
-    </div>
-    ${cards}
-    <article class="step-card">
-      <h3>Ground rules for a one-playthrough platinum</h3>
-      <ul class="fact-list">
-        <li><b>No mission replay and no New Game Plus.</b> Anything tied to a one-time story moment has to be done when it appears.</li>
-        <li><b>Cheats disable trophies and saving.</b> Play clean for the whole run.</li>
-        <li><b>No online trophies.</b> Everything can be earned solo, offline.</li>
-        <li><b>The 100% checklist is not the whole game.</b> It tracks roughly 200 of 277 vehicles, 100 of 255 animals and 70 of 80 challenges — completion is a subset of everything there is to do.</li>
-        <li><b>Six trophies still have unconfirmed triggers</b> (In The Beginning…, Capital Offense, Bad Luck I Guess, The Truth Is Out There, Ten Pin, Challenging Tank). Their entries say so plainly rather than inventing steps.</li>
-      </ul>
-    </article>`;
-}
+  window.LTGViews = {
+    esc: esc,
+    gradeLabel: gradeLabel,
+    kindLabel: kindLabel,
+    trophyList: trophyList,
+    detail: detail,
+    roadmap: roadmap,
+    missables: missables
+  };
+})();

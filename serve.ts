@@ -1,64 +1,77 @@
-// A tiny static server for app/ (Node 22, standard library only), so the guide can be run locally without a
-// build step: `node serve.ts` serves app/ on http://localhost:8080 (`--port <n>` for another port). It sends the MIME
-// types a browser needs, refuses any path outside app/, and otherwise does nothing clever: this is a development
-// convenience, not a web server for the internet.
-import { createReadStream, statSync } from 'node:fs';
-import { createServer } from 'node:http';
-import { extname, join, normalize, resolve, sep } from 'node:path';
-import { fileURLToPath } from 'node:url';
+// Leonida Trophy Guide — serve.ts
+// A small static file server for the app/ folder, written from scratch on
+// Node.js runtime built-ins only (no dependencies).
+//
+//   node serve.ts            -> http://localhost:8080
+//   PORT=3000 node serve.ts  -> http://localhost:3000
 
-const root = resolve(fileURLToPath(new URL('./app', import.meta.url)));
-const args = process.argv.slice(2);
-const portIndex = args.indexOf('--port');
-const requested = portIndex === -1 ? 8080 : Number(args[portIndex + 1]);
-const port = Number.isInteger(requested) && requested > 0 && requested < 65536 ? requested : 8080;
+import { createServer } from "node:http";
+import { readFile, stat } from "node:fs/promises";
+import { extname, join, normalize, dirname } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const PORT: number = Number(process.env.PORT ?? "8080");
+const ROOT: string = join(dirname(fileURLToPath(import.meta.url)), "app");
 
 const MIME: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.mjs': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
-  '.json': 'application/json; charset=utf-8',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.webp': 'image/webp',
-  '.ico': 'image/x-icon',
-  '.woff2': 'font/woff2',
-  '.webmanifest': 'application/manifest+json',
+  ".html": "text/html; charset=utf-8",
+  ".css": "text/css; charset=utf-8",
+  ".js": "text/javascript; charset=utf-8",
+  ".json": "application/json; charset=utf-8",
+  ".svg": "image/svg+xml",
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".ico": "image/x-icon",
+  ".txt": "text/plain; charset=utf-8",
 };
 
-createServer((request, response) => {
-  const url = new URL(request.url ?? '/', 'http://localhost');
-  let pathname: string;
+/** Map a request URL to a file inside ROOT, or null if it escapes ROOT. */
+function resolvePath(urlPath: string): string | null {
+  let decoded: string;
   try {
-    pathname = decodeURIComponent(url.pathname);
+    decoded = decodeURIComponent(urlPath);
   } catch {
-    response.writeHead(400).end('bad request');
-    return;
+    return null;
   }
-  if (pathname.endsWith('/')) pathname += 'index.html';
-  const file = resolve(join(root, normalize(pathname)));
-  if (file !== root && !file.startsWith(root + sep)) {
-    response.writeHead(403).end('forbidden');
-    return;
-  }
-  let size: number;
+  const relative = normalize(decoded).replace(/^[/\\]+/, "");
+  const full = join(ROOT, relative);
+  if (full !== ROOT && !full.startsWith(ROOT + "/")) return null;
+  return full;
+}
+
+async function sendFile(res: import("node:http").ServerResponse, filePath: string): Promise<void> {
+  const body = await readFile(filePath);
+  const type = MIME[extname(filePath).toLowerCase()] ?? "application/octet-stream";
+  res.writeHead(200, { "Content-Type": type, "Cache-Control": "no-cache" });
+  res.end(body);
+}
+
+const server = createServer(async (req, res) => {
   try {
-    const stats = statSync(file);
-    if (!stats.isFile()) throw new Error('not a file');
-    size = stats.size;
-  } catch {
-    response.writeHead(404).end('not found');
-    return;
+    const url = new URL(req.url ?? "/", "http://localhost");
+    let filePath = resolvePath(url.pathname);
+    if (filePath === null) {
+      res.writeHead(400, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("Bad request path.");
+      return;
+    }
+    let info = await stat(filePath).catch(() => null);
+    if (info !== null && info.isDirectory()) {
+      filePath = join(filePath, "index.html");
+      info = await stat(filePath).catch(() => null);
+    }
+    if (info === null || !info.isFile()) {
+      res.writeHead(404, { "Content-Type": "text/plain; charset=utf-8" });
+      res.end("Not found: " + url.pathname);
+      return;
+    }
+    await sendFile(res, filePath);
+  } catch (err) {
+    res.writeHead(500, { "Content-Type": "text/plain; charset=utf-8" });
+    res.end("Server error: " + (err instanceof Error ? err.message : String(err)));
   }
-  response.writeHead(200, {
-    'content-type': MIME[extname(file).toLowerCase()] ?? 'application/octet-stream',
-    'content-length': size,
-    'cache-control': 'no-store',
-  });
-  createReadStream(file).pipe(response);
-}).listen(port, '127.0.0.1', () => {
-  console.log(`app/ is on http://localhost:${port}`);
+});
+
+server.listen(PORT, () => {
+  console.log("Leonida Trophy Guide serving app/ at http://localhost:" + PORT);
 });
