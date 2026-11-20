@@ -1,157 +1,177 @@
-// Rendering for the three views: the checklist with its detail pane, the platinum roadmap and the missables page.
-import { KIND_LABELS, isHiddenBySpoiler } from './filters.js';
-import { ROADMAP, roadmapProgress } from './roadmap.js';
+// views.js — renders the checklist, the detail pane, the roadmap page and the
+// missables page. All text comes from data/trophies.json; this file only lays
+// it out. Visuals are CSS only — no images, no game artwork.
 
-// el builds an element with a class and text, the small helper every view uses.
-function el(tag, className, text) {
-  const node = document.createElement(tag);
-  if (className) node.className = className;
-  if (text !== undefined) node.textContent = text;
-  return node;
+import { isMasked } from "./filters.js";
+import { ROADMAP } from "./roadmap.js";
+
+const esc = (s) =>
+  String(s ?? "").replace(/[&<>"']/g, (c) => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;",
+  }[c]));
+
+const KIND_LABEL = {
+  story: "Story",
+  activity: "Activity",
+  collectible: "Collectible",
+  completion: "Completion",
+  misc: "Miscellaneous",
+};
+
+function tagsFor(t, earned) {
+  const tags = [`<span class="tag">${esc(KIND_LABEL[t.kind] || t.kind)}</span>`];
+  if (t.missable) tags.push(`<span class="tag tag-missable">Missable</span>`);
+  if (t.unconfirmed) tags.push(`<span class="tag tag-unconfirmed">Trigger unconfirmed</span>`);
+  if (t.hidden) tags.push(`<span class="tag">Hidden on PSN</span>`);
+  if (earned) tags.push(`<span class="tag tag-earned">Earned</span>`);
+  return tags.join("");
 }
 
-// gradeChip is the medal shown beside a trophy: a coloured dot and the grade word.
-export function gradeChip(grade) {
-  return el('span', `grade ${grade}`, grade);
-}
+export function renderList(listEl, trophies, ctx) {
+  listEl.innerHTML = trophies
+    .map((t) => {
+      const earned = ctx.isEarned(t.id);
+      const masked = isMasked(t, { hideSpoilers: ctx.hideSpoilers, isEarned: ctx.isEarned });
+      const name = masked ? "Hidden story trophy" : t.name;
+      const desc = masked ? "Masked by your spoiler setting — earn it to reveal." : t.description;
+      return `
+      <li>
+        <div class="trophy-row ${earned ? "is-earned" : ""} ${ctx.selectedId === t.id ? "is-selected" : ""}"
+             data-select="${t.id}" role="button" tabindex="0" aria-label="${esc(name)}">
+          <input type="checkbox" class="trophy-check" data-toggle="${t.id}"
+                 ${earned ? "checked" : ""} aria-label="Mark ${esc(name)} as earned">
+          <span class="grade-chip grade-${esc(t.grade)}">${esc(t.grade)}</span>
+          <span class="trophy-main">
+            <span class="trophy-name ${masked ? "masked" : ""}">${esc(name)}</span>
+            <span class="trophy-desc ${masked ? "masked" : ""}">${esc(desc)}</span>
+            <span class="trophy-tags">${tagsFor(t, earned)}</span>
+          </span>
+        </div>
+      </li>`;
+    })
+    .join("");
 
-// trophyRow is one checklist row: a checkbox, the official name and description (or the spoiler mask),
-// and chips for grade, kind, missable and the PSN target count where the list tracks one.
-export function trophyRow(trophy, state, callbacks) {
-  const hidden = isHiddenBySpoiler(trophy, state.spoilerOn, state.earned);
-  const row = el('li');
-  const button = el('button', `trophy${state.earned.has(trophy.name) ? ' earned' : ''}`);
-  button.type = 'button';
-  button.setAttribute('aria-selected', state.selectedId === trophy.id ? 'true' : 'false');
-  button.addEventListener('click', (event) => {
-    if (event.target.tagName === 'INPUT') return;
-    callbacks.onSelect(trophy.id);
+  listEl.querySelectorAll("[data-toggle]").forEach((box) => {
+    box.addEventListener("click", (ev) => ev.stopPropagation());
+    box.addEventListener("change", () => ctx.onToggle(Number(box.dataset.toggle), box.checked));
   });
-
-  const box = document.createElement('input');
-  box.type = 'checkbox';
-  box.checked = state.earned.has(trophy.name);
-  box.setAttribute('aria-label', `Earned: ${trophy.name}`);
-  box.addEventListener('click', (event) => {
-    event.stopPropagation();
-    callbacks.onToggle(trophy.name, box.checked);
+  listEl.querySelectorAll("[data-select]").forEach((row) => {
+    row.addEventListener("click", () => ctx.onSelect(Number(row.dataset.select)));
+    row.addEventListener("keydown", (ev) => {
+      if (ev.key === "Enter" || ev.key === " ") {
+        ev.preventDefault();
+        ctx.onSelect(Number(row.dataset.select));
+      }
+    });
   });
-  button.append(box);
-
-  const middle = el('span');
-  const name = el('span', 'trophy-name', hidden ? 'Hidden story trophy' : trophy.name);
-  if (hidden) name.classList.add('spoiler-hidden');
-  const desc = el('span', 'trophy-desc', hidden ? 'Earn it to reveal its name and description.' : trophy.description);
-  middle.append(name, document.createElement('br'), desc);
-  button.append(middle, gradeChip(trophy.grade));
-
-  const meta = el('span', 'trophy-meta');
-  meta.append(el('span', 'chip', KIND_LABELS[trophy.kind] ?? trophy.kind));
-  if (trophy.missable) meta.append(el('span', 'chip missable', 'Possibly missable'));
-  if (trophy.hidden) meta.append(el('span', 'chip hidden-note', 'Hidden on PSN'));
-  if (trophy.target) meta.append(el('span', 'chip', `Target: ${trophy.target}`));
-  button.append(meta);
-  row.append(button);
-  return row;
 }
 
-// renderDetail is the guide pane for one trophy: official name, description and grade, the guide in our own words,
-// the missable warning where one applies, the sources it cites, and a note that rarity is not published yet.
-export function renderDetail(detail, trophy, state, callbacks) {
-  detail.replaceChildren();
+export function renderDetail(pane, trophy, ctx) {
   if (!trophy) {
-    detail.append(el('p', 'placeholder', 'Pick a trophy from the checklist to read its guide, its sources and its missable warning.'));
+    pane.innerHTML = `<p class="detail-hint">Pick a trophy from the list to see its guide, target, missable warnings and sources.</p>`;
     return;
   }
-  const hidden = isHiddenBySpoiler(trophy, state.spoilerOn, state.earned);
-  detail.append(el('h2', null, hidden ? 'Hidden story trophy' : trophy.name));
-  const official = el('p', 'official', hidden ? 'Story trophy — hidden until earned.' : `${trophy.description} · ${trophy.grade[0].toUpperCase() + trophy.grade.slice(1)}`);
-  detail.append(official);
-  if (trophy.target) detail.append(el('p', null, `PSN tracks a count for this one: ${trophy.target}.`));
+  const t = trophy;
+  const earned = ctx.isEarned(t.id);
+  const masked = isMasked(t, { hideSpoilers: ctx.hideSpoilers, isEarned: ctx.isEarned });
+  const name = masked ? "Hidden story trophy" : t.name;
+  const desc = masked ? "This story trophy is masked by your spoiler setting until you earn it." : t.description;
+  const guide = masked
+    ? "The guide for this trophy is hidden too — it would give away story beats. Mark the trophy earned (or turn the spoiler setting off in the footer) to read it."
+    : t.guide;
 
-  detail.append(el('h3', null, 'How to unlock it'));
-  detail.append(el('p', null, hidden ? 'Earn this trophy in the game to reveal its guide.' : trophy.guide));
-
-  if (trophy.missable) {
-    const warn = el('p', 'warn', 'Possibly missable: the first meditation, Lucia on the balcony at Jason’s house in Chapter 1, is reported to disappear after that chapter. Do it the moment the game offers it. Source: PowerPyx.');
-    detail.append(warn);
+  const meta = [];
+  if (t.target) meta.push(`<div><b>PSN target</b>${esc(t.target)}</div>`);
+  meta.push(`<div><b>Grade / kind</b>${esc(t.grade)} · ${esc(KIND_LABEL[t.kind] || t.kind)}</div>`);
+  if (t.missable) {
+    meta.push(`<div class="warn-box"><b>Missable warning</b>This trophy can be missed. Read the guide before playing past the point it describes.</div>`);
   }
-
-  detail.append(el('h3', null, 'Sources'));
-  const sources = el('ul', 'sources');
-  for (const source of trophy.sources) {
-    const item = document.createElement('li');
-    const link = document.createElement('a');
-    link.href = source.url;
-    link.textContent = source.name;
-    link.target = '_blank';
-    link.rel = 'noopener';
-    item.append(link);
-    sources.append(item);
+  if (t.unconfirmed) {
+    meta.push(`<div class="note-box"><b>Trigger unconfirmed</b>No launch guide has confirmed this trophy's exact trigger yet, so the guide says what is known and does not invent steps.</div>`);
   }
-  detail.append(sources);
-  detail.append(el('p', 'rarity', 'Rarity: no public rate yet — the game released 19 November 2026, and PSNProfiles and Exophase publish earned percentages as players unlock trophies.'));
+  meta.push(`<div><b>Rarity</b>${esc(ctx.rarityNote)}</div>`);
 
-  const earnButton = el('button', `earn-btn${state.earned.has(trophy.name) ? ' earned' : ''}`, state.earned.has(trophy.name) ? '✓ Earned — tap to unmark' : 'Mark as earned');
-  earnButton.type = 'button';
-  earnButton.addEventListener('click', () => callbacks.onToggle(trophy.name, !state.earned.has(trophy.name)));
-  detail.append(earnButton);
+  const sources = (t.sources || [])
+    .map((s) => `<li><a href="${esc(s.url)}" target="_blank" rel="noopener">${esc(s.name)}</a></li>`)
+    .join("");
+
+  pane.innerHTML = `
+    <span class="grade-chip grade-${esc(t.grade)}">${esc(t.grade)}</span>
+    <h2 class="${masked ? "masked" : ""}">${esc(name)}</h2>
+    <p class="detail-desc ${masked ? "masked" : ""}">${esc(desc)}</p>
+    <p class="detail-guide">${esc(guide)}</p>
+    <div class="detail-meta">${meta.join("")}</div>
+    ${sources ? `<h3>Sources</h3><ul class="detail-sources">${sources}</ul>` : ""}
+    <button type="button" class="detail-toggle" data-detail-toggle="${t.id}" aria-pressed="${earned}">
+      ${earned ? "Earned — tap to undo" : "Mark as earned"}
+    </button>`;
+
+  pane.querySelector("[data-detail-toggle]").addEventListener("click", () => {
+    ctx.onToggle(t.id, !earned);
+  });
 }
 
-// renderRoadmap is the platinum roadmap view: the headline figures, then one card per step with live progress.
-export function renderRoadmap(container, trophies, earned) {
-  container.replaceChildren();
-  container.append(el('h2', null, 'Roadmap to the platinum'));
-  const callout = el('p', 'callout', `Difficulty ${ROADMAP.difficulty} · ${ROADMAP.time} · ${ROADMAP.playthroughs} · ${ROADMAP.online}. Figures from PowerPyx’s trophy guide and roadmap, 18 November 2026.`);
-  container.append(callout);
-  for (const step of ROADMAP.steps) {
-    const { done, total } = roadmapProgress(step, earned, trophies);
-    const card = el('div', 'roadmap-step');
-    card.append(el('h3', null, step.title));
-    card.append(el('p', null, ''));
-    card.lastChild.append(el('span', 'hours', `${step.hours} · `), document.createTextNode(`${done} of ${total} trophies earned`));
-    card.append(el('p', null, step.text));
-    if (step.warning) card.append(el('p', 'warn', step.warning));
-    container.append(card);
-  }
+export function renderRoadmap(section, trophies, ctx) {
+  const stepCards = ROADMAP.steps
+    .map((step) => {
+      const inStep = trophies.filter((t) => step.kinds.includes(t.kind));
+      const done = inStep.filter((t) => ctx.isEarned(t.id)).length;
+      const pct = inStep.length ? Math.round((done / inStep.length) * 100) : 0;
+      return `
+      <article class="step-card">
+        <h3>${esc(step.title)}</h3>
+        <p>${esc(step.body)}</p>
+        <div class="step-progress">
+          <div class="progress-track"><div class="progress-fill" style="width:${pct}%"></div></div>
+          <output>${done} / ${inStep.length} trophies</output>
+        </div>
+      </article>`;
+    })
+    .join("");
+
+  section.innerHTML = `
+    <div class="page-head">
+      <h2>Platinum roadmap</h2>
+      <p>${esc(ROADMAP.summary)}</p>
+    </div>
+    <div class="stat-cards">
+      <div class="stat-card"><b>${esc(ROADMAP.difficulty)}</b><span>difficulty (PowerPyx)</span></div>
+      <div class="stat-card"><b>${esc(ROADMAP.hours)}</b><span>estimated time to platinum</span></div>
+      <div class="stat-card"><b>1</b><span>possibly missable trophy</span></div>
+      <div class="stat-card"><b>0</b><span>online trophies</span></div>
+    </div>
+    ${stepCards}`;
 }
 
-// renderMissables is the missables page: the one possibly missable trophy in full, plus the safe habits that protect a run.
-export function renderMissables(container, trophies, state) {
-  container.replaceChildren();
-  container.append(el('h2', null, 'Missable trophies'));
-  const intro = el('p', 'callout warn', 'Only one trophy is reported as possibly missable: Positive Mental Attitude. Everything else — story trophies included — can be earned after the story in free-roam, and nothing on the 100% completion checklist is missable. Source: PowerPyx, 18 November 2026.');
-  container.append(intro);
-  const trophy = trophies.find((item) => item.missable);
-  if (trophy) {
-    const card = el('div', 'roadmap-step');
-    card.append(el('h3', null, trophy.name));
-    card.append(el('p', null, `${trophy.description} · Bronze · Target: ${trophy.target}.`));
-    card.append(el('p', null, trophy.guide));
-    const sources = el('ul', 'sources');
-    for (const source of trophy.sources) {
-      const item = document.createElement('li');
-      const link = document.createElement('a');
-      link.href = source.url;
-      link.textContent = source.name;
-      link.target = '_blank';
-      link.rel = 'noopener';
-      item.append(link);
-      sources.append(item);
-    }
-    card.append(el('h3', null, 'Sources'), sources);
-    container.append(card);
-  }
-  const habits = el('div', 'roadmap-step');
-  habits.append(el('h3', null, 'Safe habits for a platinum run'));
-  const list = document.createElement('ul');
-  for (const habit of [
-    'Keep a manual save at the start of every chapter and one before the final mission — there is no mission replay and no New Game Plus.',
-    'Meditate whenever the game offers it, starting in Chapter 1 (see Positive Mental Attitude above).',
-    'Take stranger missions as they appear. Some optional missions disappear over time, but there are far more strands than the eight Strangers & Freaks needs.',
-    'Keep cheats off: using any cheat disables trophies and saving.',
-    'Scan vehicles and study animals as you travel — 200 of 277 vehicles and 100 of 255 animals feed 100% completion.',
-  ]) list.append(el('li', null, habit));
-  habits.append(list);
-  container.append(habits);
+export function renderMissables(section, trophies, ctx) {
+  const missables = trophies.filter((t) => t.missable);
+  const cards = missables
+    .map((t) => {
+      const earned = ctx.isEarned(t.id);
+      return `
+      <article class="alert-card">
+        <h3>${esc(t.name)} <span class="grade-chip grade-${esc(t.grade)}">${esc(t.grade)}</span></h3>
+        <p><i>${esc(t.description)}</i>${t.target ? ` · Target: ${esc(t.target)}` : ""}</p>
+        <p>${esc(t.guide)}</p>
+        <p>${earned ? "You have marked this one earned — nothing left to worry about." : "Not yet marked earned. Do not play past the moment the guide describes without doing it."}</p>
+      </article>`;
+    })
+    .join("");
+
+  section.innerHTML = `
+    <div class="page-head">
+      <h2>Missables</h2>
+      <p>Launch guides agree the list is almost entirely missable-free — with one exception worth planning around. The facts that shape your run:</p>
+    </div>
+    ${cards}
+    <article class="step-card">
+      <h3>Ground rules for a one-playthrough platinum</h3>
+      <ul class="fact-list">
+        <li><b>No mission replay and no New Game Plus.</b> Anything tied to a one-time story moment has to be done when it appears.</li>
+        <li><b>Cheats disable trophies and saving.</b> Play clean for the whole run.</li>
+        <li><b>No online trophies.</b> Everything can be earned solo, offline.</li>
+        <li><b>The 100% checklist is not the whole game.</b> It tracks roughly 200 of 277 vehicles, 100 of 255 animals and 70 of 80 challenges — completion is a subset of everything there is to do.</li>
+        <li><b>Six trophies still have unconfirmed triggers</b> (In The Beginning…, Capital Offense, Bad Luck I Guess, The Truth Is Out There, Ten Pin, Challenging Tank). Their entries say so plainly rather than inventing steps.</li>
+      </ul>
+    </article>`;
 }

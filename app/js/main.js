@@ -1,143 +1,158 @@
-// Boot for the Leonida Trophy Guide: load the trophy list, wire the toolbar and tabs, render the views.
-// The app fetches only its own data/trophies.json at run time; nothing else leaves the browser.
-import { loadProgress, saveProgress, exportProgress, parseImportedProgress } from './store.js';
-import { applyFilters } from './filters.js';
-import { trophyRow, renderDetail, renderRoadmap, renderMissables } from './views.js';
+// main.js — boot, routing and wiring for the Leonida Trophy Guide.
+// Loads data/trophies.json, keeps the filter/selection state, and re-renders
+// on every change. All progress lives in store.js (localStorage).
 
-const data = await (await fetch('data/trophies.json')).json();
-const trophies = data.trophies;
+import * as store from "./store.js";
+import { applyFilters } from "./filters.js";
+import { renderList, renderDetail, renderRoadmap, renderMissables } from "./views.js";
 
-const state = {
-  earned: loadProgress(),
-  spoilerOn: true,
-  selectedId: null,
-  view: 'checklist',
-  filters: { search: '', grade: 'all', kind: 'all', earned: 'all' },
+const els = {
+  list: document.getElementById("trophy-list"),
+  empty: document.getElementById("empty-state"),
+  resultCount: document.getElementById("result-count"),
+  detail: document.getElementById("detail-pane"),
+  search: document.getElementById("filter-search"),
+  grade: document.getElementById("filter-grade"),
+  kind: document.getElementById("filter-kind"),
+  stateFilter: document.getElementById("filter-state"),
+  earnedCount: document.getElementById("earned-count"),
+  earnedPct: document.getElementById("earned-pct"),
+  progressBar: document.getElementById("progress-bar"),
+  views: {
+    checklist: document.getElementById("view-checklist"),
+    roadmap: document.getElementById("view-roadmap"),
+    missables: document.getElementById("view-missables"),
+  },
+  tabs: document.querySelectorAll(".tab"),
+  spoilerToggle: document.getElementById("setting-spoilers"),
+  ioStatus: document.getElementById("io-status"),
 };
 
-const rows = document.getElementById('rows');
-const detail = document.getElementById('detail');
-const resultCount = document.getElementById('result-count');
-const empty = document.getElementById('empty');
+let data = null; // parsed trophies.json
+let trophies = [];
+let selectedId = null;
+const filters = { query: "", grade: "all", kind: "all", state: "all" };
 
-// renderProgress updates the header bar: how many of the 55 are earned, and the percentage.
-function renderProgress() {
-  const earned = state.earned.size;
-  const pct = Math.round((earned / trophies.length) * 100);
-  document.getElementById('progress-count').textContent = `${earned} of ${trophies.length} earned`;
-  document.getElementById('progress-pct').textContent = `${pct}% to the platinum`;
-  document.getElementById('progress-fill').style.width = `${pct}%`;
+const ctx = () => ({
+  isEarned: store.isEarned,
+  hideSpoilers: store.getSetting("hideSpoilers"),
+  selectedId,
+  rarityNote: data ? data.rarityNote : "",
+  onToggle,
+  onSelect,
+});
+
+function onToggle(id, earned) {
+  store.setEarned(id, earned);
+  render();
 }
 
-// renderChecklist rebuilds the list from the filters and refreshes the detail pane beside it.
-function renderChecklist() {
-  const visible = applyFilters(trophies, state.filters, state.earned);
-  rows.replaceChildren();
-  for (const trophy of visible) {
-    rows.append(trophyRow(trophy, state, {
-      onSelect: (id) => { state.selectedId = id; renderChecklist(); },
-      onToggle: toggleEarned,
-    }));
+function onSelect(id) {
+  selectedId = id;
+  render();
+}
+
+function currentRoute() {
+  const hash = location.hash.replace(/^#\//, "");
+  return ["roadmap", "missables"].includes(hash) ? hash : "checklist";
+}
+
+function render() {
+  if (!data) return;
+  const route = currentRoute();
+
+  // Header progress always reflects the full list.
+  const total = trophies.length;
+  const done = store.earnedCount();
+  els.earnedCount.textContent = String(done);
+  const pct = total ? Math.round((done / total) * 100) : 0;
+  els.earnedPct.textContent = `${pct}%`;
+  els.progressBar.style.width = `${pct}%`;
+
+  // Tabs + view visibility.
+  for (const [name, section] of Object.entries(els.views)) {
+    section.hidden = name !== route;
   }
-  empty.hidden = visible.length !== 0;
-  resultCount.textContent = state.filters.kind === 'online'
-    ? 'Online trophies: none. All 55 trophies are single-player (PowerPyx) — nothing to show here.'
-    : `${visible.length} of ${trophies.length} trophies shown`;
-  const selected = trophies.find((trophy) => trophy.id === state.selectedId) ?? null;
-  renderDetail(detail, selected, state, { onToggle: toggleEarned });
+  els.tabs.forEach((tab) => tab.classList.toggle("is-active", tab.dataset.route === route));
+
+  if (route === "checklist") {
+    const visible = applyFilters(trophies, filters, store.isEarned);
+    els.resultCount.textContent = `Showing ${visible.length} of ${total} trophies`;
+    els.empty.hidden = visible.length > 0;
+    renderList(els.list, visible, ctx());
+    const selected = trophies.find((t) => t.id === selectedId) || null;
+    renderDetail(els.detail, selected, ctx());
+  } else if (route === "roadmap") {
+    renderRoadmap(els.views.roadmap, trophies, ctx());
+  } else if (route === "missables") {
+    renderMissables(els.views.missables, trophies, ctx());
+  }
 }
 
-// toggleEarned flips one trophy, saves the progress and re-renders.
-function toggleEarned(name, checked) {
-  if (checked) state.earned.add(name);
-  else state.earned.delete(name);
-  saveProgress(state.earned);
-  renderProgress();
-  renderChecklist();
-  renderRoadmapView();
-  renderMissablesView();
+function wireControls() {
+  els.search.addEventListener("input", () => { filters.query = els.search.value; render(); });
+  els.grade.addEventListener("change", () => { filters.grade = els.grade.value; render(); });
+  els.kind.addEventListener("change", () => { filters.kind = els.kind.value; render(); });
+  els.stateFilter.addEventListener("change", () => { filters.state = els.stateFilter.value; render(); });
+
+  els.spoilerToggle.checked = store.getSetting("hideSpoilers");
+  els.spoilerToggle.addEventListener("change", () => {
+    store.setSetting("hideSpoilers", els.spoilerToggle.checked);
+    render();
+  });
+
+  document.getElementById("btn-export").addEventListener("click", () => {
+    store.exportProgress();
+    els.ioStatus.textContent = "Progress exported as a JSON file.";
+  });
+
+  document.getElementById("file-import").addEventListener("change", async (ev) => {
+    const file = ev.target.files && ev.target.files[0];
+    if (!file) return;
+    const validIds = new Set(trophies.map((t) => t.id));
+    els.ioStatus.textContent = await store.importProgress(file, validIds);
+    els.spoilerToggle.checked = store.getSetting("hideSpoilers");
+    ev.target.value = "";
+    render();
+  });
+
+  document.getElementById("btn-reset").addEventListener("click", () => {
+    if (!window.confirm("Reset all progress and settings for this guide?")) return;
+    store.resetAll();
+    selectedId = null;
+    els.spoilerToggle.checked = false;
+    els.ioStatus.textContent = "Progress reset.";
+    render();
+  });
+
+  window.addEventListener("hashchange", render);
 }
 
-// showView switches between the checklist, roadmap and missables tabs and keeps the URL hash in step.
-function showView(view) {
-  state.view = view;
-  for (const section of document.querySelectorAll('.view')) section.hidden = section.id !== `view-${view}`;
-  for (const tab of document.querySelectorAll('.tab')) tab.setAttribute('aria-selected', tab.dataset.view === view ? 'true' : 'false');
-  if (location.hash !== `#${view}`) history.replaceState(null, '', `#${view}`);
-  if (view === 'roadmap') renderRoadmapView();
-  if (view === 'missables') renderMissablesView();
+function fillAbout() {
+  document.getElementById("about-notes").textContent = data.notes || "";
+  document.getElementById("about-rarity").textContent = data.rarityNote || "";
+  document.getElementById("about-sources").innerHTML = (data.sources || [])
+    .map((s) => `<li><a href="${s.url}" target="_blank" rel="noopener">${s.name}</a></li>`)
+    .join("");
 }
 
-function renderRoadmapView() {
-  renderRoadmap(document.getElementById('roadmap'), trophies, state.earned);
-}
-
-function renderMissablesView() {
-  renderMissables(document.getElementById('missables'), trophies, state);
-}
-
-// Toolbar wiring: search, grade, kind, earned, the spoiler setting, export and import.
-document.getElementById('search').addEventListener('input', (event) => {
-  state.filters.search = event.target.value;
-  renderChecklist();
-});
-document.getElementById('grade').addEventListener('change', (event) => {
-  state.filters.grade = event.target.value;
-  renderChecklist();
-});
-document.getElementById('kind').addEventListener('change', (event) => {
-  state.filters.kind = event.target.value;
-  renderChecklist();
-});
-document.getElementById('earned').addEventListener('change', (event) => {
-  state.filters.earned = event.target.value;
-  renderChecklist();
-});
-document.getElementById('spoiler').addEventListener('change', (event) => {
-  state.spoilerOn = event.target.checked;
-  renderChecklist();
-});
-document.getElementById('export').addEventListener('click', () => exportProgress(state.earned));
-document.getElementById('import').addEventListener('change', async (event) => {
-  const file = event.target.files[0];
-  if (!file) return;
+async function boot() {
   try {
-    state.earned = parseImportedProgress(await file.text(), trophies.map((trophy) => trophy.name));
-    saveProgress(state.earned);
-    renderProgress();
-    renderChecklist();
-    renderRoadmapView();
-    renderMissablesView();
-  } catch {
-    alert('That file is not a trophy progress export from this guide.');
+    const res = await fetch("data/trophies.json");
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    data = await res.json();
+  } catch (err) {
+    els.list.innerHTML = "";
+    els.empty.hidden = false;
+    els.empty.textContent =
+      "Could not load data/trophies.json. Serve this folder over HTTP (for example `node serve.ts` from the repo root) instead of opening the file directly.";
+    console.error("Failed to load trophy data:", err);
+    return;
   }
-  event.target.value = '';
-});
-
-// Tabs and deep links: #checklist, #roadmap, #missables, or #trophy-<id> to open one trophy's guide.
-for (const tab of document.querySelectorAll('.tab')) {
-  tab.addEventListener('click', () => showView(tab.dataset.view));
+  trophies = data.trophies || [];
+  fillAbout();
+  wireControls();
+  render();
 }
-window.addEventListener('hashchange', () => {
-  const hash = location.hash.slice(1);
-  if (hash.startsWith('trophy-')) {
-    state.selectedId = Number(hash.slice('trophy-'.length));
-    showView('checklist');
-    renderChecklist();
-  } else if (['checklist', 'roadmap', 'missables'].includes(hash)) {
-    showView(hash);
-  }
-});
 
-// First paint: open the view the URL names, or the checklist with the first trophy's guide open.
-const firstHash = location.hash.slice(1);
-if (firstHash.startsWith('trophy-')) {
-  state.selectedId = Number(firstHash.slice('trophy-'.length));
-} else if (['roadmap', 'missables'].includes(firstHash)) {
-  state.view = firstHash;
-} else if (trophies.length > 0) {
-  state.selectedId = trophies[0].id;
-}
-renderProgress();
-renderChecklist();
-showView(state.view);
+boot();

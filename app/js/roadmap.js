@@ -1,39 +1,53 @@
-// The platinum roadmap: three steps built from the official trophy descriptions and PowerPyx's roadmap
-// (difficulty 4/10, about 200 hours, one playthrough, no online trophies, no mission replay).
-// Each step names the trophy ids it works toward, so the roadmap view can show live progress per step.
+// roadmap.js — the platinum roadmap data.
+// Difficulty and hour estimates come from launch guides (PowerPyx rates the
+// list 4/10 and ~200 hours); each step's trophy kinds let views.js compute
+// live progress from the player's own checklist.
+
 export const ROADMAP = {
-  difficulty: '4/10',
-  time: 'about 200 hours',
-  playthroughs: '1 (free-roam continues after the story; no mission replay, no New Game Plus)',
-  online: '0 online trophies — every one of the 55 is single-player',
+  difficulty: "4/10",
+  hours: "~200 hours",
+  summary:
+    "A long but forgiving platinum. Nothing on the list demands high-end skill: " +
+    "the shooting-range golds are the closest thing to a skill check, and the real " +
+    "cost is time — the 100% completion trophy (A Long Road) alone accounts for " +
+    "most of the ~200 hours. There are no online trophies, no difficulty-setting " +
+    "trophies, and only one possibly missable trophy (Positive Mental Attitude), " +
+    "so a single careful playthrough can earn everything.",
   steps: [
     {
-      title: 'Step 1 — Play the five chapters',
-      hours: '60–80 hours',
-      trophies: [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 22, 23, 24, 26, 27, 28],
-      text: 'Play the story through its five chapters and take the optional missions as they appear. Scan vehicles and study animals as you travel, since 100% completion needs 200 of 277 vehicles scanned and 100 of 255 animals studied. Do every stranger mission you pass: some optional missions disappear after a while, but there are far more strands than the eight Strangers & Freaks needs.',
-      warning: 'Do Lucia’s Chapter 1 balcony meditation the moment it is offered (after the mission Down to Earth, talk to Lucia in the kitchen in the morning and accept). It is the one possibly missable trophy — Positive Mental Attitude — and the spot is reported to disappear after Chapter 1.',
+      title: "Step 1 — Play through the story",
+      kinds: ["story"],
+      body:
+        "Finish the campaign and every stranger strand. All 17 story trophies are " +
+        "unmissable progression awards, including the strand finales for Andy, " +
+        "Kenton, Billy, Randy and Tyrone. Two warnings before you start: the game " +
+        "has no mission replay and no New Game Plus, and entering cheat codes " +
+        "disables trophies and saving — so play clean, and when Lucia's Chapter 1 " +
+        "balcony meditation is offered, do it (it feeds the one possibly missable " +
+        "trophy in Step 2). Keep a manual save before the final mission.",
     },
     {
-      title: 'Step 2 — The 100% completion checklist',
-      hours: 'about 100 hours',
-      trophies: [14, 15, 16, 17, 18, 19, 20, 21, 25, 30, 31, 32, 35, 40, 42, 43, 46, 48, 52, 53, 54, 55],
-      text: 'After the credits, open the 100% completion checklist (Progress, Stats, 100% Completion) and work through it. It is roughly 60% of true completion: 70 of the 80 challenges, most of the collectibles and activities, and the scanning and studying from Step 1. This step is the bulk of the platinum and where trophies like Cunning Stunts (250 stunts), The Shootist (gold in all 42 Shooting Range challenges) and You WAiNKer! (100 locations) fall.',
-      warning: null,
+      title: "Step 2 — Activities & collectibles across Leonida",
+      kinds: ["activity", "collectible"],
+      body:
+        "Clear the map: 250 stunts, gold medals in all 42 shooting-range challenges, " +
+        "drone-race wins at all 14 locations, 20 race wins, 50 challenges, the card " +
+        "sets, WAiNK at 100 locations, 100 discovered vehicles, all 52 areas and all " +
+        "18 meditation spots. Positive Mental Attitude (the meditation spots) is the " +
+        "list's one possibly missable trophy — if the Chapter 1 spot was done in " +
+        "Step 1, the rest are all waiting in free roam.",
     },
     {
-      title: 'Step 3 — Strangers, character quests and cleanup',
-      hours: 'about 10 hours',
-      trophies: [1, 29, 33, 34, 36, 37, 38, 39, 41, 44, 45, 47, 49, 50, 51],
-      text: 'Finish any remaining stranger strands (eight for Strangers & Freaks), the character quests for Andy, Kenton, Billy, Randy and Tyrone, then clean up the one-off trophies: the partner robberies, Combat Focus, the VCIA departure, the jewelry store, the armored truck, and the unconfirmed ones (In The Beginning…, Capital Offense, Bad Luck, I Guess, The Truth Is Out There, Ten Pin) once launch guides verify them. The platinum, Vice Got a Price!, pops when the last of the other 54 does.',
-      warning: 'Keep cheats off for the whole run: using any cheat disables trophies and saving.',
+      title: "Step 3 — 100% completion & clean-up",
+      kinds: ["completion", "misc"],
+      body:
+        "Finish A Long Road (100% on the in-game tracker — roughly 200 of 277 " +
+        "vehicles, 100 of 255 animals and 70 of 80 challenges), then sweep the " +
+        "one-off miscellaneous trophies: the partner jobs, the vault and armored-" +
+        "truck robberies, the money totals and the rest. Six miscellaneous trophies " +
+        "still have unconfirmed triggers (see their entries) — everything else on " +
+        "the list can be cleaned up in free roam after the story. The platinum, " +
+        "Vice Got a Price!, pops the moment the 54th other trophy lands.",
     },
   ],
 };
-
-// roadmapProgress counts, per step, how many of its trophies the reader has earned.
-export function roadmapProgress(step, earned, trophies) {
-  const byId = new Map(trophies.map((trophy) => [trophy.id, trophy]));
-  const done = step.trophies.filter((id) => byId.has(id) && earned.has(byId.get(id).name)).length;
-  return { done, total: step.trophies.length };
-}
